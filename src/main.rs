@@ -5,17 +5,19 @@ use memchr::memchr;
 use memmap::Mmap;
 use rayon::{iter::ParallelIterator, slice::ParallelSlice};
 
-// implementation: user time, wall time
+// history of implementation changes
+// (implementation: user time, wall time)
 // baseline: 150.46, 2:35.80
 // no string copy: 124.91, 2:10.28
 // ahash (no aes target): 105.43, 1:50.77
-// with_capacity(10_00): 108.73, 1:54.06 -> SLOWER
+// with_capacity(10_000): 108.73, 1:54.06 -> SLOWER (was reverted)
 // custom_parse: 90.66, 1:36.31
 // no utf8 validation: 53.63, 0:59.38
-// memchr: 52.27, 1:00.20
-// mmap: 52.28, 1:00.22 -> NO CHANGE (after parallelism it had an impact)
+// memchr: NO CHANGE (kept)
+// mmap: NO CHANGE (kept, after parallelism it had a positive impact)
 // parallel dashmap: 335.80, 0:46.64
-// parallel fold: 64.44, 0:08.60
+// parallel fold and reduce: 64.44, 0:08.60
+// unsafe remove checks: NO CHANGE (was reverted)
 
 const NUM_THREADS: usize = 8;
 
@@ -26,12 +28,12 @@ fn main() {
         .expect("threadpool should be able to build");
 
     let file = std::fs::File::open("measurements.txt").expect("file should exist and be readable");
-    let data = unsafe { Mmap::map(&file).unwrap() };
+    let input_data = unsafe { Mmap::map(&file).unwrap() };
 
-    assert!(*data.last().expect("file should not be empty") == b'\n');
-    let data_trimmed = &data[..(data.len() - 1)];
+    assert!(*input_data.last().expect("file should not be empty") == b'\n');
+    let (_, input_data_trimmed) = &input_data.split_last().unwrap();
 
-    let stats_per_city = data_trimmed
+    let stats_per_city = input_data_trimmed
         .par_split(|character| *character == b'\n')
         .fold(AHashMap::new, |mut stats_per_city, line| {
             let (city_name, temperature) = parse_line(line);
@@ -154,6 +156,5 @@ fn sort_and_print(stats_per_city: CityHashMap) {
 }
 
 fn round_to_one_digit(value: f32) -> f32 {
-    // this still leaves some -0.0, but I am unsure whether this is wanted
     (value * 10.0).round() / 10.0
 }
