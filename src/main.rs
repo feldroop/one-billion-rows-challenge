@@ -1,8 +1,10 @@
-use std::collections::hash_map::Entry;
+use dashmap::mapref::entry::Entry;
 use std::io::Write;
 
-use ahash::AHashMap;
+use dashmap::DashMap;
 use memchr::memchr;
+use memmap::Mmap;
+use rayon::{iter::ParallelIterator, slice::ParallelSlice};
 
 // baseline: 150.46
 // no string copy: 124.91
@@ -11,40 +13,46 @@ use memchr::memchr;
 // custom_parse: 90.66
 // no utf8 validation: 53.63
 // memchr: 52.27
+// mmap: 52.28 -> NO CHANGE
+
+const NUM_THREADS: usize = 8;
 
 fn main() {
-    let data = std::fs::read("measurements.txt").expect("file should be readable");
+    // this is needed to control the number of threads
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(NUM_THREADS)
+        .build_global()
+        .unwrap();
+
+    let file = std::fs::File::open("measurements.txt").unwrap();
+    let data = unsafe { Mmap::map(&file).unwrap() };
 
     // remove trailing whitespace
     assert!(*data.last().unwrap() == b'\n');
     let data_trimmed = &data[..(data.len() - 1)];
 
-    let mut cities: AHashMap<_, Statistics> = AHashMap::new();
+    let ahasher = ahash::RandomState::new();
+    // not mut because of internal mutability for threading
+    let cities = DashMap::with_hasher_and_shard_amount(ahasher, NUM_THREADS * 4);
 
-    for line in data_trimmed.split(|byte| *byte == b'\n') {
-        let separator_index = memchr(b';', line).unwrap();
-        let (city_name, value_with_separator) = line.split_at(separator_index);
-        let (_, value) = value_with_separator.split_first().unwrap();
-        let parsed_value: f32 = custom_parse_temperature_value(value);
+    data_trimmed
+        .par_split(|byte| *byte == b'\n')
+        .for_each(|line| {
+            let separator_index = memchr(b';', line).unwrap();
+            let (city_name, value_with_separator) = line.split_at(separator_index);
+            let (_, value) = value_with_separator.split_first().unwrap();
+            let parsed_value: f32 = custom_parse_temperature_value(value);
 
-        match cities.entry(city_name) {
-            Entry::Occupied(mut entry) => {
-                let stats = entry.get_mut();
-                stats.min = parsed_value.min(stats.min);
-                stats.max = parsed_value.max(stats.max);
-                stats.max += parsed_value;
-                stats.num_values += 1;
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(Statistics {
-                    min: parsed_value,
-                    max: parsed_value,
-                    total: parsed_value,
-                    num_values: 1,
-                });
-            }
-        };
-    }
+            match cities.entry(city_name) {
+                Entry::Occupied(mut occupied_entry) => {
+                    let stats: &mut Statistics = occupied_entry.get_mut();
+                    stats.add_value(parsed_value);
+                }
+                Entry::Vacant(vacant_entry) => {
+                    vacant_entry.insert(Statistics::new(parsed_value));
+                }
+            };
+        });
 
     let mut cities: Vec<_> = cities.into_iter().collect();
     cities.sort_unstable_by(|(name1, _), (name2, _)| name1.cmp(name2));
@@ -94,4 +102,21 @@ struct Statistics {
     max: f32,
     total: f32,
     num_values: usize,
+}
+
+impl Statistics {
+    fn new(value: f32) -> Self {
+        Self {
+            min: value,
+            max: value,
+            total: value,
+            num_values: 1,
+        }
+    }
+    fn add_value(&mut self, value: f32) {
+        self.min = value.min(self.min);
+        self.max = value.max(self.max);
+        self.total += value;
+        self.num_values += 1;
+    }
 }
