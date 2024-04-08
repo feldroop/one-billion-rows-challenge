@@ -5,6 +5,8 @@ use ahash::AHashMap;
 // baseline: 150.46
 // no string copy: 124.91
 // ahash (no aes target): 105.43
+// with_capacity(10_00): 108.73 -> SLOWER
+// custom_parse: 90.66
 
 fn main() {
     let data = std::fs::read_to_string("measurements.txt").unwrap();
@@ -13,7 +15,7 @@ fn main() {
 
     for line in data.lines() {
         let (city_name, value) = line.split_once(';').unwrap();
-        let parsed_value: f32 = value.parse().unwrap();
+        let parsed_value: f32 = custom_parse_temperature_value(value);
 
         match cities.entry(city_name) {
             Entry::Occupied(mut entry) => {
@@ -41,11 +43,41 @@ fn main() {
         println!(
             "{}={:.1}/{:.1}/{:.1}",
             city_name,
-            stats.min,
-            stats.total / stats.num_values as f32,
-            stats.max
+            round_to_one_digit(stats.min),
+            round_to_one_digit(stats.total / stats.num_values as f32),
+            round_to_one_digit(stats.max)
         );
     }
+}
+
+fn round_to_one_digit(value: f32) -> f32 {
+    // this still leaves some -0.0, but I am unsure wther this is wanted
+    (value * 10.0).round() / 10.0
+}
+
+fn custom_parse_temperature_value(value_slice: &str) -> f32 {
+    let mut bytes = value_slice.as_bytes();
+
+    let sign = if bytes[0] == b'-' {
+        bytes = &bytes[1..];
+        -1f32
+    } else {
+        1f32
+    };
+
+    let offset = bytes.len() - 3;
+
+    let first_digit = (bytes[offset] - b'0') as f32;
+    let after_comma = (bytes[offset + 2] - b'0') as f32 * 0.1;
+    let small_value = first_digit + after_comma;
+
+    let unsigned_value = if offset == 0 {
+        small_value
+    } else {
+        small_value + ((bytes[0] - b'0') * 10) as f32
+    };
+
+    unsigned_value.copysign(sign)
 }
 
 struct Statistics {
