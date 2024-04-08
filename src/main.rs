@@ -1,4 +1,5 @@
 use std::collections::hash_map::Entry;
+use std::io::Write;
 
 use ahash::AHashMap;
 
@@ -7,14 +8,22 @@ use ahash::AHashMap;
 // ahash (no aes target): 105.43
 // with_capacity(10_00): 108.73 -> SLOWER
 // custom_parse: 90.66
+// no utf8 validation: 53.63
 
 fn main() {
-    let data = std::fs::read_to_string("measurements.txt").unwrap();
+    let data = std::fs::read("measurements.txt").expect("file should be readable");
+
+    // remove trailing whitespace
+    assert!(*data.last().unwrap() == b'\n');
+    let data_trimmed = &data[..(data.len() - 1)];
 
     let mut cities: AHashMap<_, Statistics> = AHashMap::new();
 
-    for line in data.lines() {
-        let (city_name, value) = line.split_once(';').unwrap();
+    for line in data_trimmed.split(|byte| *byte == b'\n') {
+        let seperator_index = line.iter().position(|&b| b == b';').unwrap();
+
+        let (city_name, value_with_separator) = line.split_at(seperator_index);
+        let (_, value) = value_with_separator.split_first().unwrap();
         let parsed_value: f32 = custom_parse_temperature_value(value);
 
         match cities.entry(city_name) {
@@ -39,10 +48,11 @@ fn main() {
     let mut cities: Vec<_> = cities.into_iter().collect();
     cities.sort_unstable_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
+    let mut out = std::io::stdout();
     for (city_name, stats) in cities {
+        out.write_all(city_name).unwrap();
         println!(
-            "{}={:.1}/{:.1}/{:.1}",
-            city_name,
+            "={:.1}/{:.1}/{:.1}",
             round_to_one_digit(stats.min),
             round_to_one_digit(stats.total / stats.num_values as f32),
             round_to_one_digit(stats.max)
@@ -55,9 +65,7 @@ fn round_to_one_digit(value: f32) -> f32 {
     (value * 10.0).round() / 10.0
 }
 
-fn custom_parse_temperature_value(value_slice: &str) -> f32 {
-    let mut bytes = value_slice.as_bytes();
-
+fn custom_parse_temperature_value(mut bytes: &[u8]) -> f32 {
     let sign = if bytes[0] == b'-' {
         bytes = &bytes[1..];
         -1f32
