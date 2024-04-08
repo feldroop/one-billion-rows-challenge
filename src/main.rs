@@ -13,63 +13,52 @@ use rayon::{iter::ParallelIterator, slice::ParallelSlice};
 // custom_parse: 90.66, 1:36.31
 // no utf8 validation: 53.63, 0:59.38
 // memchr: 52.27, 1:00.20
-// mmap: 52.28, 1:00.22 -> NO CHANGE
+// mmap: 52.28, 1:00.22 -> NO CHANGE (after parallelism it had an impact)
 // parallel dashmap: 335.80, 0:46.64
-// dashmap with capacity: 326.30, 0:45.34
 // parallel fold: 64.44, 0:08.60
 
 const NUM_THREADS: usize = 8;
 
 fn main() {
-    // this is needed to control the number of threads
     rayon::ThreadPoolBuilder::new()
         .num_threads(NUM_THREADS)
         .build_global()
-        .unwrap();
+        .expect("threadpool should be able to build");
 
-    let file = std::fs::File::open("measurements.txt").unwrap();
+    let file = std::fs::File::open("measurements.txt").expect("file should exist and be readable");
     let data = unsafe { Mmap::map(&file).unwrap() };
 
-    // remove trailing whitespace
-    assert!(*data.last().unwrap() == b'\n');
+    assert!(*data.last().expect("file should not be empty") == b'\n');
     let data_trimmed = &data[..(data.len() - 1)];
 
     let stats_per_city = data_trimmed
-        .par_split(|byte| *byte == b'\n')
+        .par_split(|character| *character == b'\n')
         .fold(AHashMap::new, |mut stats_per_city, line| {
-            let (city_name, parsed_value) = parse_line(line);
+            let (city_name, temperature) = parse_line(line);
 
             stats_per_city
                 .entry(city_name)
-                .and_modify(|stats: &mut Statistics| stats.add_value(parsed_value))
-                .or_insert(Statistics::new(parsed_value));
+                .and_modify(|stats: &mut Statistics| stats.add_value(temperature))
+                .or_insert_with(|| Statistics::new(temperature));
 
             stats_per_city
         })
         .reduce_with(merge_city_hashmaps_from_parallel_tasks)
         .unwrap();
 
-    let mut city_stats: Vec<_> = stats_per_city.into_iter().collect();
-    city_stats.sort_unstable_by(|(name1, _), (name2, _)| name1.cmp(name2));
-
-    let mut out = std::io::stdout();
-    for (city_name, stats) in city_stats {
-        out.write_all(city_name).unwrap();
-        println!(
-            "={:.1}/{:.1}/{:.1}",
-            round_to_one_digit(stats.min),
-            round_to_one_digit(stats.total / stats.num_values as f32),
-            round_to_one_digit(stats.max)
-        );
-    }
+    sort_and_print(stats_per_city);
 }
 
-fn round_to_one_digit(value: f32) -> f32 {
-    // this still leaves some -0.0, but I am unsure whether this is wanted
-    (value * 10.0).round() / 10.0
+fn parse_line(line: &[u8]) -> (&[u8], f32) {
+    let separator_index = memchr(b';', line).unwrap();
+    let (city_name, value_with_separator) = line.split_at(separator_index);
+    let (_, value) = value_with_separator.split_first().unwrap();
+    let parsed_value: f32 = parse_temperature_value(value);
+
+    (city_name, parsed_value)
 }
 
-fn custom_parse_temperature_value(mut bytes: &[u8]) -> f32 {
+fn parse_temperature_value(mut bytes: &[u8]) -> f32 {
     let sign = if bytes[0] == b'-' {
         bytes = &bytes[1..];
         -1f32
@@ -90,15 +79,6 @@ fn custom_parse_temperature_value(mut bytes: &[u8]) -> f32 {
     };
 
     unsigned_value.copysign(sign)
-}
-
-fn parse_line(line: &[u8]) -> (&[u8], f32) {
-    let separator_index = memchr(b';', line).unwrap();
-    let (city_name, value_with_separator) = line.split_at(separator_index);
-    let (_, value) = value_with_separator.split_first().unwrap();
-    let parsed_value: f32 = custom_parse_temperature_value(value);
-
-    (city_name, parsed_value)
 }
 
 struct Statistics {
@@ -154,4 +134,26 @@ fn merge_city_hashmaps_from_parallel_tasks<'a>(
     }
 
     larger_stats_per_city
+}
+
+fn sort_and_print(stats_per_city: CityHashMap) {
+    let mut city_stats: Vec<_> = stats_per_city.into_iter().collect();
+    city_stats.sort_unstable_by(|(name1, _), (name2, _)| name1.cmp(name2));
+
+    let mut out = std::io::stdout();
+    for (city_name, stats) in city_stats {
+        out.write_all(city_name)
+            .expect("should be able to write to stdout");
+        println!(
+            "={:.1}/{:.1}/{:.1}",
+            round_to_one_digit(stats.min),
+            round_to_one_digit(stats.total / stats.num_values as f32),
+            round_to_one_digit(stats.max)
+        );
+    }
+}
+
+fn round_to_one_digit(value: f32) -> f32 {
+    // this still leaves some -0.0, but I am unsure whether this is wanted
+    (value * 10.0).round() / 10.0
 }
