@@ -1,15 +1,18 @@
 use std::collections::hash_map::{Entry, HashMap};
 
+// baseline: 150.46
+// no string copy: 124.91
+
 fn main() {
     let data = std::fs::read_to_string("measurements.txt").unwrap();
 
-    let mut cities: HashMap<String, Statistics> = HashMap::new();
+    let mut cities: HashMap<_, Statistics> = HashMap::new();
 
     for line in data.lines() {
         let (city_name, value) = line.split_once(';').unwrap();
         let parsed_value: f32 = value.parse().unwrap();
 
-        match cities.entry(city_name.to_string()) {
+        match cities.entry(city_name) {
             Entry::Occupied(mut entry) => {
                 let stats = entry.get_mut();
                 stats.min = parsed_value.min(stats.min);
