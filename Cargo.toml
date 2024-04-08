@@ -1,6 +1,6 @@
 [package]
 name = "one-billion-rows-challenge"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 
 [dependencies]
@@ -8,4 +8,3 @@ ahash = "0.8"
 memchr = "2.7.2"
 memmap = "0.7.0"
 rayon = "1.10"
-dashmap = "5.5.3"
