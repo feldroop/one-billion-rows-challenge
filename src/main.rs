@@ -1,7 +1,4 @@
 use ahash::AHashMap;
-use std::io::Write;
-
-use memchr::memchr;
 use memmap::Mmap;
 use rayon::{iter::ParallelIterator, slice::ParallelSlice};
 
@@ -52,7 +49,7 @@ fn main() {
 }
 
 fn parse_line(line: &[u8]) -> (&[u8], f32) {
-    let separator_index = memchr(b';', line).unwrap();
+    let separator_index = memchr::memchr(b';', line).unwrap();
     let (city_name, value_with_separator) = line.split_at(separator_index);
     let (_, value) = value_with_separator.split_first().unwrap();
     let parsed_value: f32 = parse_temperature_value(value);
@@ -142,12 +139,10 @@ fn sort_and_print(stats_per_city: CityHashMap) {
     let mut city_stats: Vec<_> = stats_per_city.into_iter().collect();
     city_stats.sort_unstable_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
-    let mut out = std::io::stdout();
     for (city_name, stats) in city_stats {
-        out.write_all(city_name)
-            .expect("should be able to write to stdout");
         println!(
-            "={:.1}/{:.1}/{:.1}",
+            "{}={:.1}/{:.1}/{:.1}",
+            std::str::from_utf8(city_name).expect("input should be utf8"),
             round_to_one_digit(stats.min),
             round_to_one_digit(stats.total / stats.num_values as f32),
             round_to_one_digit(stats.max)
