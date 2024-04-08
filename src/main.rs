@@ -1,12 +1,15 @@
-use std::collections::hash_map::{Entry, HashMap};
+use std::collections::hash_map::Entry;
+
+use ahash::AHashMap;
 
 // baseline: 150.46
 // no string copy: 124.91
+// ahash (no aes target): 105.43
 
 fn main() {
     let data = std::fs::read_to_string("measurements.txt").unwrap();
 
-    let mut cities: HashMap<_, Statistics> = HashMap::new();
+    let mut cities: AHashMap<_, Statistics> = AHashMap::new();
 
     for line in data.lines() {
         let (city_name, value) = line.split_once(';').unwrap();
