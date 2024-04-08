@@ -10,7 +10,7 @@ use rayon::{iter::ParallelIterator, slice::ParallelSlice};
 // with_capacity(10_000): 108.73, 1:54.06 -> SLOWER (was reverted)
 // custom_parse: 90.66, 1:36.31
 // no utf8 validation: 53.63, 0:59.38
-// memchr: NO CHANGE (kept)
+// memchr: NO CHANGE (kept, in the end it had a tiny positive impact)
 // mmap: NO CHANGE (kept, after parallelism it had a positive impact)
 // parallel dashmap: 335.80, 0:46.64
 // parallel fold and reduce: 64.44, 0:08.60
