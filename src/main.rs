@@ -1,19 +1,22 @@
-use dashmap::mapref::entry::Entry;
+use ahash::AHashMap;
 use std::io::Write;
 
-use dashmap::DashMap;
 use memchr::memchr;
 use memmap::Mmap;
 use rayon::{iter::ParallelIterator, slice::ParallelSlice};
 
-// baseline: 150.46
-// no string copy: 124.91
-// ahash (no aes target): 105.43
-// with_capacity(10_00): 108.73 -> SLOWER
-// custom_parse: 90.66
-// no utf8 validation: 53.63
-// memchr: 52.27
-// mmap: 52.28 -> NO CHANGE
+// implementation: user time, wall time
+// baseline: 150.46, 2:35.80
+// no string copy: 124.91, 2:10.28
+// ahash (no aes target): 105.43, 1:50.77
+// with_capacity(10_00): 108.73, 1:54.06 -> SLOWER
+// custom_parse: 90.66, 1:36.31
+// no utf8 validation: 53.63, 0:59.38
+// memchr: 52.27, 1:00.20
+// mmap: 52.28, 1:00.22 -> NO CHANGE
+// parallel dashmap: 335.80, 0:46.64
+// dashmap with capacity: 326.30, 0:45.34
+// parallel fold: 64.44, 0:08.60
 
 const NUM_THREADS: usize = 8;
 
@@ -31,34 +34,26 @@ fn main() {
     assert!(*data.last().unwrap() == b'\n');
     let data_trimmed = &data[..(data.len() - 1)];
 
-    let ahasher = ahash::RandomState::new();
-    // not mut because of internal mutability for threading
-    let cities = DashMap::with_hasher_and_shard_amount(ahasher, NUM_THREADS * 4);
-
-    data_trimmed
+    let stats_per_city = data_trimmed
         .par_split(|byte| *byte == b'\n')
-        .for_each(|line| {
-            let separator_index = memchr(b';', line).unwrap();
-            let (city_name, value_with_separator) = line.split_at(separator_index);
-            let (_, value) = value_with_separator.split_first().unwrap();
-            let parsed_value: f32 = custom_parse_temperature_value(value);
+        .fold(AHashMap::new, |mut stats_per_city, line| {
+            let (city_name, parsed_value) = parse_line(line);
 
-            match cities.entry(city_name) {
-                Entry::Occupied(mut occupied_entry) => {
-                    let stats: &mut Statistics = occupied_entry.get_mut();
-                    stats.add_value(parsed_value);
-                }
-                Entry::Vacant(vacant_entry) => {
-                    vacant_entry.insert(Statistics::new(parsed_value));
-                }
-            };
-        });
+            stats_per_city
+                .entry(city_name)
+                .and_modify(|stats: &mut Statistics| stats.add_value(parsed_value))
+                .or_insert(Statistics::new(parsed_value));
 
-    let mut cities: Vec<_> = cities.into_iter().collect();
-    cities.sort_unstable_by(|(name1, _), (name2, _)| name1.cmp(name2));
+            stats_per_city
+        })
+        .reduce_with(merge_city_hashmaps_from_parallel_tasks)
+        .unwrap();
+
+    let mut city_stats: Vec<_> = stats_per_city.into_iter().collect();
+    city_stats.sort_unstable_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
     let mut out = std::io::stdout();
-    for (city_name, stats) in cities {
+    for (city_name, stats) in city_stats {
         out.write_all(city_name).unwrap();
         println!(
             "={:.1}/{:.1}/{:.1}",
@@ -97,6 +92,15 @@ fn custom_parse_temperature_value(mut bytes: &[u8]) -> f32 {
     unsigned_value.copysign(sign)
 }
 
+fn parse_line(line: &[u8]) -> (&[u8], f32) {
+    let separator_index = memchr(b';', line).unwrap();
+    let (city_name, value_with_separator) = line.split_at(separator_index);
+    let (_, value) = value_with_separator.split_first().unwrap();
+    let parsed_value: f32 = custom_parse_temperature_value(value);
+
+    (city_name, parsed_value)
+}
+
 struct Statistics {
     min: f32,
     max: f32,
@@ -113,10 +117,41 @@ impl Statistics {
             num_values: 1,
         }
     }
+
     fn add_value(&mut self, value: f32) {
         self.min = value.min(self.min);
         self.max = value.max(self.max);
         self.total += value;
         self.num_values += 1;
     }
+
+    fn merge_with(&mut self, other: &Self) {
+        self.min = other.min.min(self.min);
+        self.max = other.max.max(self.max);
+        self.total += other.total;
+        self.num_values += other.num_values;
+    }
+}
+
+type CityHashMap<'a> = AHashMap<&'a [u8], Statistics>;
+
+fn merge_city_hashmaps_from_parallel_tasks<'a>(
+    stats_per_city1: CityHashMap<'a>,
+    stats_per_city2: CityHashMap<'a>,
+) -> CityHashMap<'a> {
+    let (mut larger_stats_per_city, smaller_stats_per_city) =
+        if stats_per_city1.len() > stats_per_city2.len() {
+            (stats_per_city1, stats_per_city2)
+        } else {
+            (stats_per_city2, stats_per_city1)
+        };
+
+    for (city_name, new_stats) in smaller_stats_per_city.into_iter() {
+        larger_stats_per_city
+            .entry(city_name)
+            .and_modify(|existing_stats| existing_stats.merge_with(&new_stats))
+            .or_insert(new_stats);
+    }
+
+    larger_stats_per_city
 }
