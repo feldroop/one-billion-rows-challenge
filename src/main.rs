@@ -2,6 +2,7 @@ use std::collections::hash_map::Entry;
 use std::io::Write;
 
 use ahash::AHashMap;
+use memchr::memchr;
 
 // baseline: 150.46
 // no string copy: 124.91
@@ -9,6 +10,7 @@ use ahash::AHashMap;
 // with_capacity(10_00): 108.73 -> SLOWER
 // custom_parse: 90.66
 // no utf8 validation: 53.63
+// memchr: 52.27
 
 fn main() {
     let data = std::fs::read("measurements.txt").expect("file should be readable");
@@ -20,9 +22,8 @@ fn main() {
     let mut cities: AHashMap<_, Statistics> = AHashMap::new();
 
     for line in data_trimmed.split(|byte| *byte == b'\n') {
-        let seperator_index = line.iter().position(|&b| b == b';').unwrap();
-
-        let (city_name, value_with_separator) = line.split_at(seperator_index);
+        let separator_index = memchr(b';', line).unwrap();
+        let (city_name, value_with_separator) = line.split_at(separator_index);
         let (_, value) = value_with_separator.split_first().unwrap();
         let parsed_value: f32 = custom_parse_temperature_value(value);
 
@@ -61,7 +62,7 @@ fn main() {
 }
 
 fn round_to_one_digit(value: f32) -> f32 {
-    // this still leaves some -0.0, but I am unsure wther this is wanted
+    // this still leaves some -0.0, but I am unsure whether this is wanted
     (value * 10.0).round() / 10.0
 }
 
