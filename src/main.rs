@@ -42,7 +42,7 @@ fn main() {
 
             stats_per_city
         })
-        .reduce_with(merge_city_hashmaps_from_parallel_tasks)
+        .reduce_with(merge_hashmaps_from_parallel_tasks)
         .unwrap();
 
     sort_and_print(stats_per_city);
@@ -51,31 +51,31 @@ fn main() {
 fn parse_line(line: &[u8]) -> (&[u8], f32) {
     let separator_index = memchr::memchr(b';', line).unwrap();
     let (city_name, value_with_separator) = line.split_at(separator_index);
-    let (_, value) = value_with_separator.split_first().unwrap();
-    let parsed_value: f32 = parse_temperature_value(value);
+    let parsed_value: f32 = parse_temperature_value(value_with_separator);
 
     (city_name, parsed_value)
 }
 
-fn parse_temperature_value(mut bytes: &[u8]) -> f32 {
-    let sign = if bytes[0] == b'-' {
-        bytes = &bytes[1..];
-        -1f32
-    } else {
-        1f32
-    };
+fn parse_temperature_value(bytes: &[u8]) -> f32 {
+    // four variants: [;1.1] [;-1.1] [;11.1] [;-11.1]
+    let last4 = bytes.last_chunk::<4>().unwrap();
 
-    let offset = bytes.len() - 3;
+    let mut parts = [
+        (last4[0] - b'0') as f32 * 10.0,
+        (last4[1] - b'0') as f32 * 1.0,
+        (last4[2] - b'0') as f32 * 0.0,
+        (last4[3] - b'0') as f32 * 0.1,
+    ];
 
-    let first_digit = (bytes[offset] - b'0') as f32;
-    let after_comma = (bytes[offset + 2] - b'0') as f32 * 0.1;
-    let small_value = first_digit + after_comma;
+    if last4[0] == b';' || last4[0] == b'-' {
+        parts[0] = 0.0;
+    }
 
-    let unsigned_value = if offset == 0 {
-        small_value
-    } else {
-        small_value + ((bytes[0] - b'0') * 10) as f32
-    };
+    let unsigned_value: f32 = parts.into_iter().sum();
+
+    // this works because b'-' is smaller than b'/',
+    // which is in turn smaller than the ascii byte of any number
+    let sign = bytes[1] as f32 - (b'/' as f32);
 
     unsigned_value.copysign(sign)
 }
@@ -114,7 +114,7 @@ impl Statistics {
 
 type CityHashMap<'a> = AHashMap<&'a [u8], Statistics>;
 
-fn merge_city_hashmaps_from_parallel_tasks<'a>(
+fn merge_hashmaps_from_parallel_tasks<'a>(
     stats_per_city1: CityHashMap<'a>,
     stats_per_city2: CityHashMap<'a>,
 ) -> CityHashMap<'a> {
