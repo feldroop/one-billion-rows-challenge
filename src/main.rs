@@ -2,20 +2,6 @@ use ahash::AHashMap;
 use memmap::Mmap;
 use rayon::{iter::ParallelIterator, slice::ParallelSlice};
 
-// history of implementation changes
-// (implementation: user time, wall time)
-// baseline: 150.46, 2:35.80
-// no string copy: 124.91, 2:10.28
-// ahash (no aes target): 105.43, 1:50.77
-// with_capacity(10_000): 108.73, 1:54.06 -> SLOWER (was reverted)
-// custom_parse: 90.66, 1:36.31
-// no utf8 validation: 53.63, 0:59.38
-// memchr: NO CHANGE (kept, in the end it had a tiny positive impact)
-// mmap: NO CHANGE (kept, after parallelism it had a positive impact)
-// parallel dashmap: 335.80, 0:46.64
-// parallel fold and reduce: 64.44, 0:08.60
-// unsafe remove checks: NO CHANGE (was reverted)
-
 const NUM_THREADS: usize = 8;
 
 fn main() {
