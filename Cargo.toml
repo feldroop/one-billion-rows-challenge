@@ -8,3 +8,8 @@ ahash = "0.8"
 memchr = "2.7.2"
 memmap = "0.7.0"
 rayon = "1.10"
+
+[profile.release]
+lto = true
+panic = 'abort'
+codegen-units = 1
